@@ -5,7 +5,9 @@ In the root directory do:
 
 make
 ./scripts/run
-diff output/vec*
+
+If the output differs from what is wanted, it will be printed.
+
 
 
 Tools for computing distributed representtion of words
