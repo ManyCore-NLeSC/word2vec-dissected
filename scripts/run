@@ -1,5 +1,5 @@
 #!/bin/bash
 
 ./word2vec -train input/data.txt -output output/vec.txt \
-	   -size 100 -window 2 -sample 0 -negative 1 -min-count 100
+	   -size 100 -window 2 -negative 1 -min-count 100
 diff output/vec.txt output/vec_wanted.txt
