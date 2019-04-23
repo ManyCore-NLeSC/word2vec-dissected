@@ -55,7 +55,7 @@ real alpha = 0.025, starting_alpha, sample = 1e-3;
 real *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
 
-int hs = 0, negative = 5;
+int negative = 5;
 const int table_size = 1e8;
 int *table;
 
@@ -295,12 +295,6 @@ void InitNet() {
   unsigned long long next_random = 1;
   a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
   if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
-  if (hs) {
-    a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
-    if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
-    for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++)
-     syn1[a * layer1_size + b] = 0;
-  }
   if (negative>0) {
     a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1neg == NULL) {printf("Memory allocation failed\n"); exit(1);}
@@ -382,22 +376,6 @@ void *TrainModelThread(void *id) {
       if (last_word == -1) continue;
       l1 = last_word * layer1_size;
       for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
-      // HIERARCHICAL SOFTMAX
-      if (hs) for (d = 0; d < vocab[word].codelen; d++) {
-        f = 0;
-        l2 = vocab[word].point[d] * layer1_size;
-        // Propagate hidden -> output
-        for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
-        if (f <= -MAX_EXP) continue;
-        else if (f >= MAX_EXP) continue;
-        else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
-        // 'g' is the gradient multiplied by the learning rate
-        g = (1 - vocab[word].code[d] - f) * alpha;
-        // Propagate errors output -> hidden
-        for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
-        // Learn weights hidden -> output
-        for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * syn0[c + l1];
-      }
       // NEGATIVE SAMPLING
       if (negative > 0) for (d = 0; d < negative + 1; d++) {
         if (d == 0) {
@@ -495,9 +473,6 @@ int main(int argc, char **argv) {
     printf("\t\tSet threshold for occurrence of words. Those that appear with higher frequency in the training data\n");
     printf("\t\twill be randomly down-sampled; default is 1e-3, useful range is (0, 1e-5)\n");
     
-    printf("\t-hs <int>\n");
-    printf("\t\tUse Hierarchical Softmax; default is 0 (not used)\n");
-    
     printf("\t-negative <int>\n");
     printf("\t\tNumber of negative examples; default is 5, common values are 3 - 10 (0 = not used)\n");
     
@@ -523,7 +498,7 @@ int main(int argc, char **argv) {
     printf("\t\tThe vocabulary will be read from <file>, not constructed from the training data\n");
     
     printf("\nExamples:\n");
-    printf("./word2vec -train data.txt -output vec.txt -size 200 -window 5 -sample 1e-4 -negative 5 -hs 0 -iter 3\n\n");
+    printf("./word2vec -train data.txt -output vec.txt -size 200 -window 5 -sample 1e-4 -negative 5 -iter 3\n\n");
     return 0;
   }
 
@@ -541,7 +516,6 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
-  if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) hs = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-iter", argc, argv)) > 0) iter = atoi(argv[i + 1]);
