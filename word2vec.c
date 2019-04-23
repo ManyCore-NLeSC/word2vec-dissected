@@ -28,8 +28,6 @@
 // the size of the hashmap with indices to the words in the vocabulary
 const int hashmap_indices_vocab_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
-typedef float real;                    // Precision of float numbers
-
 // struct for a word in the vocabulary
 struct vocab_word {
   // the number a word occurs in the text
@@ -69,26 +67,39 @@ long long dim_size = 100;
 // incremented during a run.
 long long nr_words_for_training = 0;
 
+// The alpha value to start with
+float starting_alpha = 0.025;
 
-real starting_alpha = 0.025;
-real *syn0, *syn1, *syn1neg, *expTable;
-clock_t start;
+// word and context vectors
+float *word_vec, *context_vec;
 
-int negative = 5;
-const int table_size = 1e8;
-int *table;
+// exponent table, a table with precomputed values that are often used
+float *expTable;
 
+// the number of negative samples
+int negative_samples = 5;
+
+// the size of the unigram table
+const int unigram_table_size = 1e8;
+// the unigram table itself
+int *unigram_table;
+
+// initialize the unigram table
 void InitUnigramTable() {
-  int a, i;
   double nr_words_for_training_pow = 0;
   double d1, power = 0.75;
-  table = (int *)malloc(table_size * sizeof(int));
-  for (a = 0; a < vocab_size; a++) nr_words_for_training_pow += pow(vocab[a].count, power);
-  i = 0;
+  
+  unigram_table = (int *)malloc(unigram_table_size * sizeof(int));
+  
+  for (int vi = 0; vi < vocab_size; vi++) {
+    nr_words_for_training_pow += pow(vocab[vi].count, power);
+  }
+  
+  int i = 0;
   d1 = pow(vocab[i].count, power) / nr_words_for_training_pow;
-  for (a = 0; a < table_size; a++) {
-    table[a] = i;
-    if (a / (double)table_size > d1) {
+  for (int uti = 0; uti < unigram_table_size; uti++) {
+    unigram_table[uti] = i;
+    if (uti / (double)unigram_table_size > d1) {
       i++;
       d1 += pow(vocab[i].count, power) / nr_words_for_training_pow;
     }
@@ -304,17 +315,17 @@ void ReadVocab() {
 void InitNet() {
   long long a, b;
   unsigned long long next_random = 1;
-  a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * dim_size * sizeof(real));
-  if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
-  if (negative>0) {
-    a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * dim_size * sizeof(real));
-    if (syn1neg == NULL) {printf("Memory allocation failed\n"); exit(1);}
+  a = posix_memalign((void **)&word_vec, 128, (long long)vocab_size * dim_size * sizeof(float));
+  if (word_vec == NULL) {printf("Memory allocation failed\n"); exit(1);}
+  if (negative_samples>0) {
+    a = posix_memalign((void **)&context_vec, 128, (long long)vocab_size * dim_size * sizeof(float));
+    if (context_vec == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (a = 0; a < vocab_size; a++) for (b = 0; b < dim_size; b++)
-     syn1neg[a * dim_size + b] = 0;
+     context_vec[a * dim_size + b] = 0;
   }
   for (a = 0; a < vocab_size; a++) for (b = 0; b < dim_size; b++) {
     next_random = next_random * (unsigned long long)25214903917 + 11;
-    syn0[a * dim_size + b] = (((next_random & 0xFFFF) / (real)65536) - 0.5) / dim_size;
+    word_vec[a * dim_size + b] = (((next_random & 0xFFFF) / (float)65536) - 0.5) / dim_size;
   }
 }
 
@@ -328,12 +339,13 @@ void TrainModelThread() {
 
   unsigned long long next_random = 0;
   char eof = 0;
-  real f, g;
+  float f, g;
   clock_t now;
-  real *neu1 = (real *)calloc(dim_size, sizeof(real));
-  real *neu1e = (real *)calloc(dim_size, sizeof(real));
+  float *neu1 = (float *)calloc(dim_size, sizeof(float));
+  float *neu1e = (float *)calloc(dim_size, sizeof(float));
   FILE *fi = fopen(train_file, "rb");
-  real alpha = starting_alpha;
+  float alpha = starting_alpha;
+  clock_t start = clock();
 
   fseek(fi, 0, SEEK_SET);
   while (1) {
@@ -343,11 +355,11 @@ void TrainModelThread() {
       if ((debug_mode > 1)) {
         now=clock();
         printf("%cAlpha: %f  Progress: %.2f%%  Words/thread/sec: %.2fk  ", 13, alpha,
-         total_word_count / (real)(nr_words_for_training + 1) * 100,
-         total_word_count / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
+         total_word_count / (float)(nr_words_for_training + 1) * 100,
+         total_word_count / ((float)(now - start + 1) / (float)CLOCKS_PER_SEC * 1000));
         fflush(stdout);
       }
-      alpha = starting_alpha * (1 - total_word_count / (real)(nr_words_for_training + 1));
+      alpha = starting_alpha * (1 - total_word_count / (float)(nr_words_for_training + 1));
       if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
     }
     if (sentence_length == 0) {
@@ -382,28 +394,28 @@ void TrainModelThread() {
       l1 = last_word * dim_size;
       for (c = 0; c < dim_size; c++) neu1e[c] = 0;
       // NEGATIVE SAMPLING
-      if (negative > 0) for (d = 0; d < negative + 1; d++) {
+      if (negative_samples > 0) for (d = 0; d < negative_samples + 1; d++) {
         if (d == 0) {
           target = word;
           label = 1;
         } else {
           next_random = next_random * (unsigned long long)25214903917 + 11;
-          target = table[(next_random >> 16) % table_size];
+          target = unigram_table[(next_random >> 16) % unigram_table_size];
           if (target == 0) target = next_random % (vocab_size - 1) + 1;
           if (target == word) continue;
           label = 0;
         }
         l2 = target * dim_size;
         f = 0;
-        for (c = 0; c < dim_size; c++) f += syn0[c + l1] * syn1neg[c + l2];
+        for (c = 0; c < dim_size; c++) f += word_vec[c + l1] * context_vec[c + l2];
         if (f > MAX_EXP) g = (label - 1) * alpha;
         else if (f < -MAX_EXP) g = (label - 0) * alpha;
         else g = (label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
-        for (c = 0; c < dim_size; c++) neu1e[c] += g * syn1neg[c + l2];
-        for (c = 0; c < dim_size; c++) syn1neg[c + l2] += g * syn0[c + l1];
+        for (c = 0; c < dim_size; c++) neu1e[c] += g * context_vec[c + l2];
+        for (c = 0; c < dim_size; c++) context_vec[c + l2] += g * word_vec[c + l1];
       }
       // Learn weights input -> hidden
-      for (c = 0; c < dim_size; c++) syn0[c + l1] += neu1e[c];
+      for (c = 0; c < dim_size; c++) word_vec[c + l1] += neu1e[c];
     }
     sentence_position++;
     if (sentence_position >= sentence_length) {
@@ -424,15 +436,14 @@ void TrainModel() {
   if (save_vocab_file[0] != 0) SaveVocab();
   if (output_file[0] == 0) return;
   InitNet();
-  if (negative > 0) InitUnigramTable();
-  start = clock();
+  if (negative_samples > 0) InitUnigramTable();
   TrainModelThread();
   fo = fopen(output_file, "wb");
   // Save the word vectors
   fprintf(fo, "%lld %lld\n", vocab_size, dim_size);
   for (a = 0; a < vocab_size; a++) {
     fprintf(fo, "%s ", vocab[a].word);
-    for (b = 0; b < dim_size; b++) fprintf(fo, "%lf ", syn0[a * dim_size + b]);
+    for (b = 0; b < dim_size; b++) fprintf(fo, "%lf ", word_vec[a * dim_size + b]);
     fprintf(fo, "\n");
   }
   fclose(fo);
@@ -506,7 +517,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) starting_alpha = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative_samples = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
 
   // Allocate the vocabulary.  The size will grow during the run of the program
@@ -516,9 +527,9 @@ int main(int argc, char **argv) {
   hashmap_indices_vocab = (int *)calloc(hashmap_indices_vocab_size, sizeof(int));
 
   // exponent table for gradient descent
-  expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
+  expTable = (float *)malloc((EXP_TABLE_SIZE + 1) * sizeof(float));
   for (i = 0; i < EXP_TABLE_SIZE; i++) {
-    expTable[i] = exp((i / (real)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
+    expTable[i] = exp((i / (float)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
     expTable[i] = expTable[i] / (expTable[i] + 1);                   // Precompute f(x) = x / (x + 1)
   }
   TrainModel();
