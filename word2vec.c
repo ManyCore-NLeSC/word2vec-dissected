@@ -46,7 +46,7 @@ char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
 
 // parameters, see the main method for an explanation
-int debug_mode = 2, window = 5, min_count = 5, num_threads = 12, min_reduce = 1;
+int debug_mode = 2, window = 5, min_count = 5, min_reduce = 1;
 
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
@@ -307,18 +307,18 @@ void InitNet() {
   }
 }
 
-void *TrainModelThread(void *id) {
+void TrainModelThread() {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
   long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l2, c, target, label, local_iter = iter;
-  unsigned long long next_random = (long long)id;
+  unsigned long long next_random = 0;
   char eof = 0;
   real f, g;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e = (real *)calloc(layer1_size, sizeof(real));
   FILE *fi = fopen(train_file, "rb");
-  fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
+  fseek(fi, 0, SEEK_SET);
   while (1) {
     if (word_count - last_word_count > 10000) {
       word_count_actual += word_count - last_word_count;
@@ -352,14 +352,14 @@ void *TrainModelThread(void *id) {
       }
       sentence_position = 0;
     }
-    if (eof || (word_count > train_words / num_threads)) {
+    if (eof || (word_count > train_words)) {
       word_count_actual += word_count - last_word_count;
       local_iter--;
       if (local_iter == 0) break;
       word_count = 0;
       last_word_count = 0;
       sentence_length = 0;
-      fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
+      fseek(fi, 0, SEEK_SET);
       continue;
     }
     word = sen[sentence_position];
@@ -409,13 +409,11 @@ void *TrainModelThread(void *id) {
   fclose(fi);
   free(neu1);
   free(neu1e);
-  pthread_exit(NULL);
 }
 
 void TrainModel() {
   long a, b;
   FILE *fo;
-  pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
   printf("Starting training using file %s\n", train_file);
   starting_alpha = alpha;
   if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
@@ -424,8 +422,7 @@ void TrainModel() {
   InitNet();
   if (negative > 0) InitUnigramTable();
   start = clock();
-  for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
-  for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+  TrainModelThread();
   fo = fopen(output_file, "wb");
   // Save the word vectors
   fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
@@ -476,9 +473,6 @@ int main(int argc, char **argv) {
     printf("\t-negative <int>\n");
     printf("\t\tNumber of negative examples; default is 5, common values are 3 - 10 (0 = not used)\n");
     
-    printf("\t-threads <int>\n");
-    printf("\t\tUse <int> threads (default 12)\n");
-    
     printf("\t-iter <int>\n");
     printf("\t\tRun more training iterations (default 5)\n");
     
@@ -517,7 +511,6 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-iter", argc, argv)) > 0) iter = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
