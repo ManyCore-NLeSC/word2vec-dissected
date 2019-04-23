@@ -24,16 +24,18 @@
 #define EXP_TABLE_SIZE 1000
 #define MAX_EXP 6
 #define MAX_SENTENCE_LENGTH 1000
-#define MAX_CODE_LENGTH 40
 
-const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
+// the size of the hashmap with indices to the words in the vocabulary
+const int hashmap_indices_vocab_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
 typedef float real;                    // Precision of float numbers
 
+// struct for a word in the vocabulary
 struct vocab_word {
-  long long cn;
-  int *point;
-  char *word, *code, codelen;
+  // the number a word occurs in the text
+  long long count;
+  // the word itself
+  char *word;
 };
 
 // the input and output file names
@@ -48,7 +50,7 @@ struct vocab_word *vocab;
 // parameters, see the main method for an explanation
 int debug_mode = 2, window = 5, min_count = 5, min_reduce = 1;
 
-int *vocab_hash;
+int *hashmap_indices_vocab;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0;
 real alpha = 0.025, starting_alpha;
@@ -64,14 +66,14 @@ void InitUnigramTable() {
   double train_words_pow = 0;
   double d1, power = 0.75;
   table = (int *)malloc(table_size * sizeof(int));
-  for (a = 0; a < vocab_size; a++) train_words_pow += pow(vocab[a].cn, power);
+  for (a = 0; a < vocab_size; a++) train_words_pow += pow(vocab[a].count, power);
   i = 0;
-  d1 = pow(vocab[i].cn, power) / train_words_pow;
+  d1 = pow(vocab[i].count, power) / train_words_pow;
   for (a = 0; a < table_size; a++) {
     table[a] = i;
     if (a / (double)table_size > d1) {
       i++;
-      d1 += pow(vocab[i].cn, power) / train_words_pow;
+      d1 += pow(vocab[i].count, power) / train_words_pow;
     }
     if (i >= vocab_size) i = vocab_size - 1;
   }
@@ -108,7 +110,7 @@ void ReadWord(char *word, FILE *fin, char *eof) {
 int GetWordHash(char *word) {
   unsigned long long a, hash = 0;
   for (a = 0; a < strlen(word); a++) hash = hash * 257 + word[a];
-  hash = hash % vocab_hash_size;
+  hash = hash % hashmap_indices_vocab_size;
   return hash;
 }
 
@@ -116,9 +118,9 @@ int GetWordHash(char *word) {
 int SearchVocab(char *word) {
   unsigned int hash = GetWordHash(word);
   while (1) {
-    if (vocab_hash[hash] == -1) return -1;
-    if (!strcmp(word, vocab[vocab_hash[hash]].word)) return vocab_hash[hash];
-    hash = (hash + 1) % vocab_hash_size;
+    if (hashmap_indices_vocab[hash] == -1) return -1;
+    if (!strcmp(word, vocab[hashmap_indices_vocab[hash]].word)) return hashmap_indices_vocab[hash];
+    hash = (hash + 1) % hashmap_indices_vocab_size;
   }
   return -1;
 }
@@ -140,7 +142,7 @@ int AddWordToVocab(char *word) {
   if (length > MAX_STRING) length = MAX_STRING;
   vocab[vocab_size].word = (char *)calloc(length, sizeof(char));
   strcpy(vocab[vocab_size].word, word);
-  vocab[vocab_size].cn = 0;
+  vocab[vocab_size].count = 0;
   vocab_size++;
   // Reallocate memory if needed
   if (vocab_size + 2 >= vocab_max_size) {
@@ -148,14 +150,14 @@ int AddWordToVocab(char *word) {
     vocab = (struct vocab_word *)realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
   }
   hash = GetWordHash(word);
-  while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
-  vocab_hash[hash] = vocab_size - 1;
+  while (hashmap_indices_vocab[hash] != -1) hash = (hash + 1) % hashmap_indices_vocab_size;
+  hashmap_indices_vocab[hash] = vocab_size - 1;
   return vocab_size - 1;
 }
 
 // Used later for sorting by word counts
 int VocabCompare(const void *a, const void *b) {
-  long long l = ((struct vocab_word *)b)->cn - ((struct vocab_word *)a)->cn;
+  long long l = ((struct vocab_word *)b)->count - ((struct vocab_word *)a)->count;
   if (l > 0) return 1;
   if (l < 0) return -1;
   return 0;
@@ -167,46 +169,41 @@ void SortVocab() {
   unsigned int hash;
   // Sort the vocabulary and keep </s> at the first position
   qsort(&vocab[1], vocab_size - 1, sizeof(struct vocab_word), VocabCompare);
-  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+  for (a = 0; a < hashmap_indices_vocab_size; a++) hashmap_indices_vocab[a] = -1;
   size = vocab_size;
   train_words = 0;
   for (a = 0; a < size; a++) {
     // Words occuring less than min_count times will be discarded from the vocab
-    if ((vocab[a].cn < min_count) && (a != 0)) {
+    if ((vocab[a].count < min_count) && (a != 0)) {
       vocab_size--;
       free(vocab[a].word);
     } else {
       // Hash will be re-computed, as after the sorting it is not actual
       hash=GetWordHash(vocab[a].word);
-      while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
-      vocab_hash[hash] = a;
-      train_words += vocab[a].cn;
+      while (hashmap_indices_vocab[hash] != -1) hash = (hash + 1) % hashmap_indices_vocab_size;
+      hashmap_indices_vocab[hash] = a;
+      train_words += vocab[a].count;
     }
   }
   vocab = (struct vocab_word *)realloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
-  // Allocate memory for the binary tree construction
-  for (a = 0; a < vocab_size; a++) {
-    vocab[a].code = (char *)calloc(MAX_CODE_LENGTH, sizeof(char));
-    vocab[a].point = (int *)calloc(MAX_CODE_LENGTH, sizeof(int));
-  }
 }
 
 // Reduces the vocabulary by removing infrequent tokens
 void ReduceVocab() {
   int a, b = 0;
   unsigned int hash;
-  for (a = 0; a < vocab_size; a++) if (vocab[a].cn > min_reduce) {
-    vocab[b].cn = vocab[a].cn;
+  for (a = 0; a < vocab_size; a++) if (vocab[a].count > min_reduce) {
+    vocab[b].count = vocab[a].count;
     vocab[b].word = vocab[a].word;
     b++;
   } else free(vocab[a].word);
   vocab_size = b;
-  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+  for (a = 0; a < hashmap_indices_vocab_size; a++) hashmap_indices_vocab[a] = -1;
   for (a = 0; a < vocab_size; a++) {
     // Hash will be re-computed, as it is not actual
     hash = GetWordHash(vocab[a].word);
-    while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
-    vocab_hash[hash] = a;
+    while (hashmap_indices_vocab[hash] != -1) hash = (hash + 1) % hashmap_indices_vocab_size;
+    hashmap_indices_vocab[hash] = a;
   }
   fflush(stdout);
   min_reduce++;
@@ -216,7 +213,7 @@ void LearnVocabFromTrainFile() {
   char word[MAX_STRING], eof = 0;
   FILE *fin;
   long long a, i, wc = 0;
-  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+  for (a = 0; a < hashmap_indices_vocab_size; a++) hashmap_indices_vocab[a] = -1;
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
     printf("ERROR: training data file not found!\n");
@@ -237,9 +234,9 @@ void LearnVocabFromTrainFile() {
     i = SearchVocab(word);
     if (i == -1) {
       a = AddWordToVocab(word);
-      vocab[a].cn = 1;
-    } else vocab[i].cn++;
-    if (vocab_size > vocab_hash_size * 0.7) ReduceVocab();
+      vocab[a].count = 1;
+    } else vocab[i].count++;
+    if (vocab_size > hashmap_indices_vocab_size * 0.7) ReduceVocab();
   }
   SortVocab();
   if (debug_mode > 0) {
@@ -253,7 +250,7 @@ void LearnVocabFromTrainFile() {
 void SaveVocab() {
   long long i;
   FILE *fo = fopen(save_vocab_file, "wb");
-  for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", vocab[i].word, vocab[i].cn);
+  for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", vocab[i].word, vocab[i].count);
   fclose(fo);
 }
 
@@ -266,13 +263,13 @@ void ReadVocab() {
     printf("Vocabulary file not found\n");
     exit(1);
   }
-  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+  for (a = 0; a < hashmap_indices_vocab_size; a++) hashmap_indices_vocab[a] = -1;
   vocab_size = 0;
   while (1) {
     ReadWord(word, fin, &eof);
     if (eof) break;
     a = AddWordToVocab(word);
-    fscanf(fin, "%lld%c", &vocab[a].cn, &c);
+    fscanf(fin, "%lld%c", &vocab[a].count, &c);
     i++;
   }
   SortVocab();
@@ -492,8 +489,14 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
+
+  // Allocate the vocabulary.  The size will grow during the run of the program
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
-  vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
+
+  // alocate the hash table with indices
+  hashmap_indices_vocab = (int *)calloc(hashmap_indices_vocab_size, sizeof(int));
+
+  // exponent table for gradient descent
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
   for (i = 0; i < EXP_TABLE_SIZE; i++) {
     expTable[i] = exp((i / (real)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
