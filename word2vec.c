@@ -50,7 +50,7 @@ int debug_mode = 2, window = 5, min_count = 5, min_reduce = 1;
 
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
-long long train_words = 0, word_count_actual = 0, iter = 5, file_size = 0;
+long long train_words = 0, word_count_actual = 0, file_size = 0;
 real alpha = 0.025, starting_alpha, sample = 1e-3;
 real *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
@@ -310,7 +310,7 @@ void InitNet() {
 void TrainModelThread() {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
   long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
-  long long l1, l2, c, target, label, local_iter = iter;
+  long long l1, l2, c, target, label;
   unsigned long long next_random = 0;
   char eof = 0;
   real f, g;
@@ -326,11 +326,11 @@ void TrainModelThread() {
       if ((debug_mode > 1)) {
         now=clock();
         printf("%cAlpha: %f  Progress: %.2f%%  Words/thread/sec: %.2fk  ", 13, alpha,
-         word_count_actual / (real)(iter * train_words + 1) * 100,
+         word_count_actual / (real)(train_words + 1) * 100,
          word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
         fflush(stdout);
       }
-      alpha = starting_alpha * (1 - word_count_actual / (real)(iter * train_words + 1));
+      alpha = starting_alpha * (1 - word_count_actual / (real)(train_words + 1));
       if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
     }
     if (sentence_length == 0) {
@@ -354,13 +354,7 @@ void TrainModelThread() {
     }
     if (eof || (word_count > train_words)) {
       word_count_actual += word_count - last_word_count;
-      local_iter--;
-      if (local_iter == 0) break;
-      word_count = 0;
-      last_word_count = 0;
-      sentence_length = 0;
-      fseek(fi, 0, SEEK_SET);
-      continue;
+      break;
     }
     word = sen[sentence_position];
     if (word == -1) continue;
@@ -473,9 +467,6 @@ int main(int argc, char **argv) {
     printf("\t-negative <int>\n");
     printf("\t\tNumber of negative examples; default is 5, common values are 3 - 10 (0 = not used)\n");
     
-    printf("\t-iter <int>\n");
-    printf("\t\tRun more training iterations (default 5)\n");
-    
     printf("\t-min-count <int>\n");
     printf("\t\tThis will discard words that appear less than <int> times; default is 5\n");
     
@@ -492,7 +483,7 @@ int main(int argc, char **argv) {
     printf("\t\tThe vocabulary will be read from <file>, not constructed from the training data\n");
     
     printf("\nExamples:\n");
-    printf("./word2vec -train data.txt -output vec.txt -size 200 -window 5 -sample 1e-4 -negative 5 -iter 3\n\n");
+    printf("./word2vec -train data.txt -output vec.txt -size 200 -window 5 -sample 1e-4 -negative 5\n\n");
     return 0;
   }
 
@@ -511,7 +502,6 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-iter", argc, argv)) > 0) iter = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
