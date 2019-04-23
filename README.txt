@@ -1,3 +1,13 @@
+Run the experiment
+------------------
+
+In the root directory do:
+
+make
+./scripts/run
+diff output/vec*
+
+
 Tools for computing distributed representtion of words
 ------------------------------------------------------
 
