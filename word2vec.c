@@ -86,24 +86,43 @@ int *unigram_table;
 
 // initialize the unigram table
 void InitUnigramTable() {
+  // the total number of words in the text
+  //   It has the suffix power, because instead of counting the number of words
+  //   that word w occurs in the text, it counts the the number of words to the 
+  //   power of 3/4.
+  //   This power should also be reflected in the total number of words.
   double nr_words_for_training_pow = 0;
-  double d1, power = 0.75;
   
+  double power = 0.75;
+
   unigram_table = (int *)malloc(unigram_table_size * sizeof(int));
-  
+
+  // compute the total number of words in the text (taking into account the
+  // power)
   for (int vi = 0; vi < vocab_size; vi++) {
     nr_words_for_training_pow += pow(vocab[vi].count, power);
   }
+
+  // index into the vocabulary
+  int vi = 0;
   
-  int i = 0;
-  d1 = pow(vocab[i].count, power) / nr_words_for_training_pow;
+  // threshold for moving to the next word to insert in the unigram table
+  double threshold = pow(vocab[vi].count, power) / nr_words_for_training_pow;
+
   for (int uti = 0; uti < unigram_table_size; uti++) {
-    unigram_table[uti] = i;
-    if (uti / (double)unigram_table_size > d1) {
-      i++;
-      d1 += pow(vocab[i].count, power) / nr_words_for_training_pow;
+
+    // add word vi to the unigram table
+    unigram_table[uti] = vi;
+
+    // If the unigram table is filled with n times word index vi, where n
+    // corresponds with the distribution, we move to the next word.
+    if (uti / (double)unigram_table_size > threshold) {
+      vi++;
+      threshold += pow(vocab[vi].count, power) / nr_words_for_training_pow;
     }
-    if (i >= vocab_size) i = vocab_size - 1;
+    if (vi >= vocab_size) {
+      vi = vocab_size - 1;
+    }
   }
 }
 
@@ -281,6 +300,7 @@ void SaveVocab() {
   fclose(fo);
 }
 
+// Read a vocabulary file
 void ReadVocab() {
   long long a, i = 0;
   char c, eof = 0;
@@ -428,15 +448,35 @@ void TrainModelThread() {
   free(neu1e);
 }
 
+// train a model from a train file
 void TrainModel() {
   long a, b;
   FILE *fo;
   printf("Starting training using file %s\n", train_file);
-  if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
-  if (save_vocab_file[0] != 0) SaveVocab();
+
+  if (read_vocab_file[0] != 0) { // if vocabulary file has not been set
+    // read the vocabulary from the file
+    ReadVocab();
+  }
+  else {
+    // learn the vocabulary from the train file
+    LearnVocabFromTrainFile();
+  }
+
+  // if the file name to save the vocabulary was specified, save it
+  if (save_vocab_file[0] != 0) {
+    SaveVocab();
+  }
+
+  // if the output file was not specified, stop
   if (output_file[0] == 0) return;
+
+  // Initialize the neural network
   InitNet();
+
+  // If we perform negative sampling, initialize the unigram distribution table
   if (negative_samples > 0) InitUnigramTable();
+  
   TrainModelThread();
   fo = fopen(output_file, "wb");
   // Save the word vectors
@@ -505,6 +545,7 @@ int main(int argc, char **argv) {
   }
 
   // set the filenames to the null character, so to an empty string
+  // this means that the file names have not been set
   output_file[0] = '\0';
   save_vocab_file[0] = '\0';
   read_vocab_file[0] = '\0';
